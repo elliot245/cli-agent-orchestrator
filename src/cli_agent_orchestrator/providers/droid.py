@@ -8,6 +8,7 @@ from typing import Optional
 from cli_agent_orchestrator.clients.tmux import tmux_client
 from cli_agent_orchestrator.models.terminal import TerminalStatus
 from cli_agent_orchestrator.providers.base import BaseProvider
+from cli_agent_orchestrator.utils.agent_profiles import load_agent_profile
 from cli_agent_orchestrator.utils.terminal import wait_for_shell
 
 # Regex patterns for Droid output analysis
@@ -59,7 +60,9 @@ class DroidProvider(BaseProvider):
 
         command = "droid"
         if self._agent_profile:
-            command = f"{command} {shlex.quote(self._agent_profile)}"
+            initial_prompt = self._resolve_initial_prompt(self._agent_profile)
+            if initial_prompt:
+                command = f"{command} {shlex.quote(initial_prompt)}"
 
         tmux_client.send_keys(self.session_name, self.window_name, command)
 
@@ -167,3 +170,29 @@ class DroidProvider(BaseProvider):
                 continue
             return bool(re.match(CHAT_PROMPT_LINE_PATTERN, line))
         return False
+
+    def _resolve_initial_prompt(self, agent_profile: str) -> str:
+        """Resolve the initial prompt passed to `droid`.
+
+        For CAO, `agent_profile` is typically the name of an agent profile markdown.
+        Droid CLI does not support loading system prompts directly, so we pass a
+        condensed, single-line instruction.
+
+        If profile loading fails, fall back to treating `agent_profile` as a raw
+        prompt string.
+        """
+        try:
+            profile = load_agent_profile(agent_profile)
+            if profile.system_prompt:
+                return self._condense_prompt(profile.system_prompt)
+        except Exception:
+            pass
+
+        return self._condense_prompt(agent_profile)
+
+    def _condense_prompt(self, prompt: str, max_chars: int = 2000) -> str:
+        """Make a prompt safe to pass as a single CLI argument."""
+        condensed = re.sub(r"\s+", " ", prompt).strip()
+        if len(condensed) > max_chars:
+            return condensed[: max_chars - 3] + "..."
+        return condensed
