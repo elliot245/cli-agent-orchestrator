@@ -51,16 +51,18 @@ class TestDroidProviderInitialization:
 
     @patch("cli_agent_orchestrator.providers.droid.wait_for_shell")
     @patch("cli_agent_orchestrator.providers.droid.tmux_client")
+    @patch("cli_agent_orchestrator.providers.droid.DroidProvider.get_status")
     @patch("cli_agent_orchestrator.providers.droid.time.time")
-    def test_initialize_droid_timeout(self, mock_time, mock_tmux, mock_wait_shell):
+    def test_initialize_droid_does_not_timeout_on_processing(
+        self, mock_time, mock_get_status, mock_tmux, mock_wait_shell
+    ):
         mock_wait_shell.return_value = True
-        # Make the init loop time out immediately
-        mock_time.side_effect = [0.0, 31.0]
+        mock_get_status.return_value = TerminalStatus.PROCESSING
+        mock_time.side_effect = [0.0, 0.0, 4.0]
 
         provider = DroidProvider("test1234", "test-session", "window-0", None)
 
-        with pytest.raises(TimeoutError, match="Droid initialization timed out"):
-            provider.initialize()
+        assert provider.initialize() is True
 
 
 class TestDroidProviderStatusDetection:

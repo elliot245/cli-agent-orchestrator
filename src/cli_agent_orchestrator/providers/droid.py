@@ -19,10 +19,13 @@ BOX_DRAWING_PATTERN = r"[\u2500-\u257F]"
 CHAT_PROMPT_LINE_PATTERN = r"^\s*>\s*$"
 
 # Auth / login UI markers (droid@0.41.0)
-LOGIN_REQUIRED_PATTERN = r"Please login with your Factory account to continue\."
-LOGIN_MENU_CURSOR_PATTERN = r"(?m)^\s*>\s*Login\s*$"
-RETRY_CURSOR_PATTERN = r"(?m)^\s*>\s*Press Enter to try again\s*$"
+LOGIN_REQUIRED_PATTERN = r"(?i)Please login with your Factory account to continue\.?"
+LOGIN_MENU_CURSOR_PATTERN = r"(?m)^\s*[>❯]\s*Login\s*$"
+RETRY_CURSOR_PATTERN = r"(?m)^\s*[>❯]\s*Press Enter to try again\s*$"
 AUTH_FAILED_PATTERN = r"Authentication failed:"
+
+# Shell error marker
+COMMAND_NOT_FOUND_PATTERN = r"(?i)(droid:.*not found|command not found.*droid)"
 
 # Non-interactive error marker
 NONINTERACTIVE_AUTH_FAILED_PATTERN = r"Error during droid execution: Authentication failed\."
@@ -71,12 +74,23 @@ class DroidProvider(BaseProvider):
         start_time = time.time()
         while time.time() - start_time < 30.0:
             status = self.get_status()
+            if status == TerminalStatus.ERROR:
+                raise TimeoutError("Droid initialization failed")
+
             if status in (TerminalStatus.IDLE, TerminalStatus.WAITING_USER_ANSWER):
                 self._initialized = True
                 return True
+
+            # Droid may take longer (e.g., interactive login); don't fail session
+            # creation just because it hasn't reached a recognizable prompt yet.
+            if status == TerminalStatus.PROCESSING and (time.time() - start_time) >= 3.0:
+                self._initialized = True
+                return True
+
             time.sleep(1.0)
 
-        raise TimeoutError("Droid initialization timed out after 30 seconds")
+        self._initialized = True
+        return True
 
     def get_status(self, tail_lines: Optional[int] = None) -> TerminalStatus:
         """Get Droid status by analyzing terminal output."""
@@ -90,6 +104,9 @@ class DroidProvider(BaseProvider):
             return TerminalStatus.ERROR
 
         clean_output = self._normalize_output(output)
+
+        if re.search(COMMAND_NOT_FOUND_PATTERN, clean_output):
+            return TerminalStatus.ERROR
 
         # Login-required / auth UI should never be treated as ready-for-task.
         if re.search(LOGIN_REQUIRED_PATTERN, clean_output):
